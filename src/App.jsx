@@ -3,9 +3,6 @@ import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import superstoreData from './superstore_data.json';
 
-// ========================================================================
-// 1. FUNGSI SAKTI: PENGONVERSI FORMAT ANGKA & TANGGAL EXCEL
-// ========================================================================
 const parseNum = (val) => {
   if (!val) return 0;
   if (typeof val === 'number') return val;
@@ -39,7 +36,6 @@ const getMonthYearFromRow = (row) => {
   return `${year}-01`;
 };
 
-// Fungsi pembantu format Uang
 const formatUang = (angka) => `$${Math.round(angka).toLocaleString('id-ID')}`;
 
 function App() {
@@ -92,9 +88,6 @@ function App() {
     return { totalSales: sales, totalProfit: profit, totalQuantity: qty, profitMargin: sales > 0 ? (profit / sales) * 100 : 0 };
   }, [filteredData]);
 
-  // ========================================================================
-  // 🔥 OTAK AI: MENGHITUNG INSIGHT OTOMATIS UNTUK NARASI DINAMIS
-  // ========================================================================
   const insights = useMemo(() => {
     if (filteredData.length === 0) return null;
 
@@ -142,7 +135,6 @@ function App() {
     };
   }, [filteredData]);
 
-  // KONFIGURASI GRAFIK
   const salesTrendOption = useMemo(() => {
     const agg = {};
     filteredData.forEach(row => { agg[getMonthYearFromRow(row)] = (agg[getMonthYearFromRow(row)] || 0) + parseNum(row.Sales); });
@@ -186,6 +178,13 @@ function App() {
     return { title: { text: 'Heatmap Penjualan (Region vs Category)', left: 'center' }, tooltip: { position: 'top' }, grid: { height: '55%', top: '18%' }, xAxis: { type: 'category', data: regions, splitArea: { show: true } }, yAxis: { type: 'category', data: categories, splitArea: { show: true } }, visualMap: { min: 0, max: Math.max(...data.map(d=>d[2]), 100000), calculable: true, orient: 'horizontal', left: 'center', bottom: '0%', inRange: { color: ['#f8fafc', '#93c5fd', '#1e3a8a'] } }, series: [{ name: 'Sales', type: 'heatmap', data: data, label: { show: true }, emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' } } }] };
   }, [filteredData]);
 
+  // Fungsi aman untuk mengambil nama bulan dari string YYYY-MM
+  const formatBulan = (bulanTahun) => {
+    if (!bulanTahun || bulanTahun === '-') return '-';
+    const parts = bulanTahun.split('-');
+    return parts.length > 1 ? `Bulan ke-${parts[1]} (${parts[0]})` : bulanTahun;
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans border-t-4 border-blue-600">
       
@@ -201,7 +200,7 @@ function App() {
         </div>
       </div>
 
-      {/* FILTER */}
+      {/* FILTER BOX */}
       <div className="max-w-7xl mx-auto mb-6 bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-wrap gap-6 items-center">
         <div className="flex items-center gap-3">
           <span className="font-bold text-sm text-slate-700 uppercase tracking-wider">📅 Tahun:</span>
@@ -229,19 +228,20 @@ function App() {
         ))}
       </div>
 
-      {/* KONTEN JIKA DATA KOSONG */}
+      {/* ERROR KALAU FILTER KOSONG */}
       {!insights && (
         <div className="max-w-7xl mx-auto bg-red-50 text-red-600 p-8 rounded-2xl text-center font-bold border border-red-200">
           ⚠️ Tidak ada data untuk kombinasi filter ini. Silakan ubah filter.
         </div>
       )}
 
-      {/* KONTEN UTAMA JIKA DATA ADA */}
+      {/* HALAMAN RENDER (MENGGUNAKAN CONDITIONAL RENDERING AGAR TIDAK RAM CRASH) */}
       {insights && (
-        <div className="max-w-7xl mx-auto">
-          {/* HALAMAN 1: OVERVIEW */}
-          <div className={activeTab === 'overview' ? 'block animate-fade-in' : 'hidden'}>
-            <div className="space-y-8">
+        <div className="max-w-7xl mx-auto min-h-[500px]">
+          
+          {/* TAB 1: OVERVIEW */}
+          {activeTab === 'overview' && (
+            <div className="space-y-8 animate-fade-in">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 border-l-4 border-l-blue-500">
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Total Penjualan</p>
@@ -267,7 +267,7 @@ function App() {
                   <div className="p-6 bg-slate-50/80 flex-1 border-t border-slate-200">
                     <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2"><span className="text-blue-500">📈</span> Narasi Tren Dinamis:</h4>
                     <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                      Berdasarkan filter data yang kamu pilih, puncak penjualan omset tertinggi terjadi pada periode <strong>{insights.topMonth.name}</strong> dengan total pemasukan mencapai <strong className="text-green-600">{formatUang(insights.topMonth.value)}</strong>. Fluktuasi di bulan-bulan lainnya menunjukkan bahwa perusahaan harus memusatkan kampanye pemasaran saat mendekati periode puncak ini.
+                      Berdasarkan filter data yang kamu pilih, puncak penjualan omset tertinggi terjadi pada periode <strong>{formatBulan(insights.topMonth.name)}</strong> dengan total pemasukan mencapai <strong className="text-green-600">{formatUang(insights.topMonth.value)}</strong>. Fluktuasi ini menunjukkan bahwa perusahaan harus memusatkan kampanye pemasaran saat mendekati periode puncak ini.
                     </p>
                   </div>
                 </div>
@@ -282,17 +282,17 @@ function App() {
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* HALAMAN 2: DEMOGRAFI */}
-          <div className={activeTab === 'demografi' ? 'block animate-fade-in' : 'hidden'}>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* TAB 2: DEMOGRAFI */}
+          {activeTab === 'demografi' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
                 <div className="p-4 border-b border-slate-100"><ReactECharts option={segmentOption} notMerge={true} style={{ height: '350px' }} /></div>
                 <div className="p-6 bg-slate-50/80 flex-1 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">👤</span> Pangsa Segmen Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Analisis data menunjukkan bahwa kelompok pembeli dari segmen <strong>{insights.topSegment.name}</strong> menjadi penopang pendapatan utama dengan transaksi mencapai <strong>{formatUang(insights.topSegment.value)}</strong>. Strategi <i>customer retention</i> harus diprioritaskan pada segmen ini karena terbukti paling responsif terhadap penjualan.
+                    Analisis data menunjukkan bahwa kelompok pembeli dari segmen <strong>{insights.topSegment.name}</strong> menjadi penopang pendapatan utama dengan transaksi mencapai <strong>{formatUang(insights.topSegment.value)}</strong>. Strategi <i>customer retention</i> harus diprioritaskan pada segmen ini.
                   </p>
                 </div>
               </div>
@@ -301,22 +301,22 @@ function App() {
                 <div className="p-6 bg-slate-50/80 flex-1 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">📦</span> Kategori Favorit Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Dari data yang disaring, komoditas barang dari kategori <strong>{insights.topCategory.name}</strong> sangat diminati pasar, menyumbang sales sebesar <strong>{formatUang(insights.topCategory.value)}</strong>. Manajemen stok untuk barang di kategori ini harus diperketat agar tidak terjadi <i>out-of-stock</i>.
+                    Dari data yang disaring, komoditas barang dari kategori <strong>{insights.topCategory.name}</strong> sangat diminati pasar, menyumbang sales sebesar <strong>{formatUang(insights.topCategory.value)}</strong>. Manajemen stok untuk barang di kategori ini harus diperketat agar tidak kehabisan barang.
                   </p>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* HALAMAN 3: PRODUK */}
-          <div className={activeTab === 'produk' ? 'block animate-fade-in' : 'hidden'}>
-            <div className="space-y-8">
+          {/* TAB 3: PRODUK */}
+          {activeTab === 'produk' && (
+            <div className="space-y-8 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
                 <div className="p-4 border-b border-slate-100"><ReactECharts option={subCategoryOption} notMerge={true} style={{ height: '420px' }} /></div>
                 <div className="p-6 bg-slate-50/80 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">📊</span> Evaluasi Omset Sub-Kategori Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Membedah lebih dalam ke tingkat sub-kategori, produk unggulan (Star Product) saat ini adalah <strong>{insights.topSub.name}</strong> dengan raihan sales memukau sebesar <strong>{formatUang(insights.topSub.value)}</strong>. Produk ini memiliki *brand awareness* yang kuat di rentang filter yang Anda pilih.
+                    Membedah lebih dalam ke tingkat sub-kategori, produk unggulan (Star Product) saat ini adalah <strong>{insights.topSub.name}</strong> dengan raihan sales memukau sebesar <strong>{formatUang(insights.topSub.value)}</strong>. Produk ini memiliki daya tarik pasar yang kuat di rentang filter yang Anda pilih.
                   </p>
                 </div>
               </div>
@@ -325,16 +325,16 @@ function App() {
                 <div className="p-6 bg-slate-50/80 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">⚠️</span> Peringatan Profitabilitas Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Meskipun ada barang laku, grafik ini mendeteksi titik lemah perusahaan. Sub-kategori <strong>{insights.worstSub.name}</strong> adalah produk dengan performa margin terburuk saat ini dengan riwayat profitabilitas di angka <strong className="text-red-600">{formatUang(insights.worstSub.value)}</strong>. Ini butuh evaluasi Harga Jual Pokok (HPP) atau pengurangan diskon secara radikal!
+                    Meskipun ada barang laku, grafik ini mendeteksi titik lemah perusahaan. Sub-kategori <strong>{insights.worstSub.name}</strong> adalah produk dengan performa margin terburuk saat ini dengan riwayat profitabilitas di angka <strong className="text-red-600">{formatUang(insights.worstSub.value)}</strong>. Ini butuh evaluasi Harga Modal (HPP) segera!
                   </p>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* HALAMAN 4: KESIMPULAN */}
-          <div className={activeTab === 'kesimpulan' ? 'block animate-fade-in' : 'hidden'}>
-            <div className="space-y-8">
+          {/* TAB 4: KESIMPULAN AI */}
+          {activeTab === 'kesimpulan' && (
+            <div className="space-y-8 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
                 <div className="p-4 border-b border-slate-100"><ReactECharts option={heatmapOption} notMerge={true} style={{ height: '380px' }} /></div>
                 <div className="p-6 bg-slate-50/80 border-t border-slate-200">
@@ -357,7 +357,7 @@ function App() {
                   <li className="flex gap-3 items-start">
                     <span className="text-blue-400 font-bold text-lg mt-0.5">1.</span>
                     <div>
-                      Pertahankan *supply chain* prioritas untuk negara bagian <strong>{insights.topState.name}</strong>, mengingat area ini adalah jantung pendapatan perusahaan (Total: {formatUang(insights.topState.value)}).
+                      Pertahankan stok pengiriman prioritas untuk negara bagian <strong>{insights.topState.name}</strong>, mengingat area ini adalah jantung pendapatan perusahaan (Total: {formatUang(insights.topState.value)}).
                     </div>
                   </li>
                   <li className="flex gap-3 items-start">
@@ -375,13 +375,13 @@ function App() {
                   <li className="flex gap-3 items-start">
                     <span className="text-blue-400 font-bold text-lg mt-0.5">4.</span>
                     <div>
-                      Siapkan anggaran besar di bulan <strong>{insights.topMonth.name.split('-')[1]}</strong> tahun berikutnya untuk memaksimalkan euforia historis belanja tertinggi bulanan.
+                      Siapkan anggaran besar saat mendekati <strong>{formatBulan(insights.topMonth.name)}</strong> untuk memaksimalkan momentum periode belanja tertinggi bulanan.
                     </div>
                   </li>
                 </ul>
               </div>
             </div>
-          </div>
+          )}
 
         </div>
       )}
