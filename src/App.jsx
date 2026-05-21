@@ -1,8 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useTransition } from 'react';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import superstoreData from './superstore_data.json';
 
+// ========================================================================
+// 1. PREPROCESS DATA SEKALI SAJA (Di luar komponen)
+// ========================================================================
 const parseNum = (val) => {
   if (!val) return 0;
   if (typeof val === 'number') return val;
@@ -23,73 +26,105 @@ const getYearFromRow = (row) => {
   return '2026';
 };
 
-const getMonthYearFromRow = (row) => {
-  const year = getYearFromRow(row);
+const getMonthYearFromRow = (row, year) => {
   if (row.Bulan) return `${year}-${String(row.Bulan).padStart(2, '0')}`;
-  
   const num = parseFloat(row['Order Date']);
   if (!isNaN(num) && num > 30000) {
     const date = new Date((num - 25569) * 86400 * 1000);
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    return `${date.getFullYear()}-${month}`;
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
   }
   return `${year}-01`;
 };
 
-const formatUang = (angka) => `$${Math.round(angka).toLocaleString('id-ID')}`;
+// Data yang sudah bersih, tinggal pakai! (Mencegah parse berulang)
+const preprocessedData = superstoreData.map(row => {
+  const year = getYearFromRow(row);
+  return {
+    ...row,
+    parsedSales: parseNum(row.Sales),
+    parsedProfit: parseNum(row.Profit),
+    parsedQty: parseNum(row.Quantity),
+    year: year,
+    monthYear: getMonthYearFromRow(row, year),
+    state: row['State/Province'] || row.State || 'Unknown',
+    segment: row.Segment || 'Unknown',
+    category: row.Category || 'Unknown',
+    subCategory: row['Sub-Category'] || 'Unknown',
+    region: row.Region || 'Unknown'
+  };
+});
 
-function App() {
+// Daftar Filter Unik
+const filterOptions = {
+  years: ['Semua', ...Array.from(new Set(preprocessedData.map(d => d.year))).sort()],
+  regions: ['Semua', ...Array.from(new Set(preprocessedData.map(d => d.region))).sort()]
+};
+
+const formatUang = (angka) => `$${Math.round(angka).toLocaleString('id-ID')}`;
+const formatBulan = (bTahun) => bTahun && bTahun !== '-' ? (bTahun.split('-').length > 1 ? `Bulan ke-${bTahun.split('-')[1]} (${bTahun.split('-')[0]})` : bTahun) : '-';
+
+// ========================================================================
+// 2. KOMPONEN CHART MEMOIZED (Cegah Re-render Ekstra)
+// ========================================================================
+const MemoizedChart = React.memo(({ option, style, isMapLoaded }) => {
+  if (isMapLoaded === false) return <div style={style} className="flex items-center justify-center font-bold text-slate-400 bg-slate-50/50 rounded-xl">Memuat Peta...</div>;
+  // lazyUpdate=true membuat render tidak blocking
+  return <ReactECharts option={option} notMerge={true} lazyUpdate={true} style={style} />;
+}, (prevProps, nextProps) => prevProps.option === nextProps.option && prevProps.isMapLoaded === nextProps.isMapLoaded);
+
+export default function App() {
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
 
+  // STATE FILTER & TRANSITION
   const [selectedYear, setSelectedYear] = useState('Semua');
   const [selectedRegion, setSelectedRegion] = useState('Semua');
+  const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
     fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json')
-      .then(response => response.json())
+      .then(res => res.json())
       .then(usaJson => {
         echarts.registerMap('USA', usaJson);
         setIsMapLoaded(true);
       })
-      .catch(err => console.error("Gagal memuat file peta:", err));
+      .catch(err => console.error("Gagal muat peta:", err));
   }, []);
 
-  const filterOptions = useMemo(() => {
-    const years = new Set();
-    const regions = new Set();
-    superstoreData.forEach(row => {
-      years.add(getYearFromRow(row));
-      if (row.Region) regions.add(row.Region);
-    });
-    return {
-      years: ['Semua', ...Array.from(years).sort()],
-      regions: ['Semua', ...Array.from(regions).sort()]
-    };
-  }, []);
-
+  // ========================================================================
+  // 3. FILTERING DATA
+  // ========================================================================
   const filteredData = useMemo(() => {
-    return superstoreData.filter(row => {
-      const year = getYearFromRow(row);
-      const region = row.Region || '';
-      const matchYear = selectedYear === 'Semua' || year === selectedYear;
-      const matchRegion = selectedRegion === 'Semua' || region === selectedRegion;
-      return matchYear && matchRegion;
-    });
+    return preprocessedData.filter(row => 
+      (selectedYear === 'Semua' || row.year === selectedYear) &&
+      (selectedRegion === 'Semua' || row.region === selectedRegion)
+    );
   }, [selectedYear, selectedRegion]);
 
-  const kpi = useMemo(() => {
-    let sales = 0, profit = 0, qty = 0;
-    filteredData.forEach(row => {
-      sales += parseNum(row.Sales);
-      profit += parseNum(row.Profit);
-      qty += parseNum(row.Quantity);
-    });
-    return { totalSales: sales, totalProfit: profit, totalQuantity: qty, profitMargin: sales > 0 ? (profit / sales) * 100 : 0 };
-  }, [filteredData]);
+  // ========================================================================
+  // 4. AGREGASI SEKALI JALAN (SINGLE-PASS) UNTUK SEMUA GRAFIK
+  // ========================================================================
+  const aggData = useMemo(() => {
+    const kpi = { totalSales: 0, totalProfit: 0, totalQuantity: 0 };
+    const aggMonth = {}, aggState = {}, aggSeg = {}, aggCat = {}, aggSubSales = {}, aggSubProf = {}, aggRegCat = {};
 
-  const insights = useMemo(() => {
-    if (filteredData.length === 0) return null;
+    filteredData.forEach(row => {
+      kpi.totalSales += row.parsedSales;
+      kpi.totalProfit += row.parsedProfit;
+      kpi.totalQuantity += row.parsedQty;
+
+      aggMonth[row.monthYear] = (aggMonth[row.monthYear] || 0) + row.parsedSales;
+      aggState[row.state] = (aggState[row.state] || 0) + row.parsedSales;
+      aggSeg[row.segment] = (aggSeg[row.segment] || 0) + row.parsedSales;
+      aggCat[row.category] = (aggCat[row.category] || 0) + row.parsedSales;
+      aggSubSales[row.subCategory] = (aggSubSales[row.subCategory] || 0) + row.parsedSales;
+      aggSubProf[row.subCategory] = (aggSubProf[row.subCategory] || 0) + row.parsedProfit;
+      
+      const rcKey = `${row.region}-${row.category}`;
+      aggRegCat[rcKey] = (aggRegCat[rcKey] || 0) + row.parsedSales;
+    });
+
+    kpi.profitMargin = kpi.totalSales > 0 ? (kpi.totalProfit / kpi.totalSales) * 100 : 0;
 
     const getTop = (agg) => {
       let maxKey = '-', maxVal = -Infinity;
@@ -103,87 +138,45 @@ function App() {
       return { name: minKey, value: minVal };
     };
 
-    const aggMonth = {}, aggState = {}, aggSeg = {}, aggCat = {}, aggSubSales = {}, aggSubProf = {}, aggRegCat = {};
-
-    filteredData.forEach(row => {
-      const month = getMonthYearFromRow(row);
-      const state = row['State/Province'] || row.State || 'Unknown';
-      const seg = row.Segment || 'Unknown';
-      const cat = row.Category || 'Unknown';
-      const sub = row['Sub-Category'] || 'Unknown';
-      const regCat = `${row.Region || 'Unknown'} - ${cat}`;
-      const sales = parseNum(row.Sales);
-      const profit = parseNum(row.Profit);
-
-      aggMonth[month] = (aggMonth[month] || 0) + sales;
-      aggState[state] = (aggState[state] || 0) + sales;
-      aggSeg[seg] = (aggSeg[seg] || 0) + sales;
-      aggCat[cat] = (aggCat[cat] || 0) + sales;
-      aggSubSales[sub] = (aggSubSales[sub] || 0) + sales;
-      aggSubProf[sub] = (aggSubProf[sub] || 0) + profit;
-      aggRegCat[regCat] = (aggRegCat[regCat] || 0) + sales;
-    });
-
     return {
-      topMonth: getTop(aggMonth),
-      topState: getTop(aggState),
-      topSegment: getTop(aggSeg),
-      topCategory: getTop(aggCat),
-      topSub: getTop(aggSubSales),
-      worstSub: getBottom(aggSubProf),
-      topRegCat: getTop(aggRegCat)
+      kpi, aggMonth, aggState, aggSeg, aggCat, aggSubSales, aggSubProf, aggRegCat,
+      insights: filteredData.length > 0 ? {
+        topMonth: getTop(aggMonth), topState: getTop(aggState), topSegment: getTop(aggSeg),
+        topCategory: getTop(aggCat), topSub: getTop(aggSubSales), worstSub: getBottom(aggSubProf), topRegCat: getTop(aggRegCat)
+      } : null
     };
   }, [filteredData]);
 
-  const salesTrendOption = useMemo(() => {
-    const agg = {};
-    filteredData.forEach(row => { agg[getMonthYearFromRow(row)] = (agg[getMonthYearFromRow(row)] || 0) + parseNum(row.Sales); });
-    const sortedKeys = Object.keys(agg).sort();
-    return { title: { text: 'Tren Penjualan Bulanan', left: 'center' }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: sortedKeys, axisLabel: { rotate: 45, fontSize: 10 } }, yAxis: { type: 'value' }, series: [{ data: sortedKeys.map(k => Math.round(agg[k])), type: 'line', smooth: true, itemStyle: { color: '#2563eb' }, areaStyle: { opacity: 0.1, color: '#2563eb' } }] };
-  }, [filteredData]);
+  // ========================================================================
+  // 5. CHART OPTIONS (Hanya mengubah format data dari agregasi)
+  // ========================================================================
+  const chartOptions = useMemo(() => {
+    const { aggMonth, aggState, aggSeg, aggCat, aggSubSales, aggSubProf, aggRegCat } = aggData;
+    
+    const sortedMonth = Object.keys(aggMonth).sort();
+    const sortedSubS = Object.entries(aggSubSales).sort((a,b) => a[1] - b[1]);
+    const sortedSubP = Object.entries(aggSubProf).sort((a,b) => b[1] - a[1]);
+    
+    const regions = ['Central', 'East', 'South', 'West'], categories = ['Furniture', 'Office Supplies', 'Technology'];
+    const heatmapArr = [];
+    regions.forEach((r, i) => { categories.forEach((c, j) => { heatmapArr.push([i, j, Math.round(aggRegCat[`${r}-${c}`] || 0)]); }); });
 
-  const mapChartOption = useMemo(() => {
-    const stateData = {};
-    filteredData.forEach(row => { const state = row['State/Province'] || row.State; if (state) stateData[state] = (stateData[state] || 0) + parseNum(row.Sales); });
-    const data = Object.keys(stateData).map(state => ({ name: state, value: Math.round(stateData[state]) }));
-    return { title: { text: 'Peta Penjualan (Negara Bagian)', left: 'center' }, tooltip: { trigger: 'item' }, visualMap: { left: 'right', min: 0, max: Math.max(...data.map(d=>d.value), 10000), inRange: { color: ['#e0f2fe', '#3b82f6', '#1e3a8a'] }, calculable: true }, series: [{ type: 'map', map: 'USA', roam: true, data }] };
-  }, [filteredData]);
+    return {
+      trend: { title: { text: 'Tren Penjualan Bulanan', left: 'center' }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: sortedMonth, axisLabel: { rotate: 45, fontSize: 10 } }, yAxis: { type: 'value' }, series: [{ data: sortedMonth.map(k => Math.round(aggMonth[k])), type: 'line', smooth: true, itemStyle: { color: '#2563eb' }, areaStyle: { opacity: 0.1, color: '#2563eb' } }] },
+      map: { title: { text: 'Peta Penjualan (Negara Bagian)', left: 'center' }, tooltip: { trigger: 'item' }, visualMap: { left: 'right', min: 0, max: Math.max(...Object.values(aggState), 10000), inRange: { color: ['#e0f2fe', '#3b82f6', '#1e3a8a'] }, calculable: true }, series: [{ type: 'map', map: 'USA', roam: true, data: Object.keys(aggState).map(k => ({ name: k, value: Math.round(aggState[k]) })) }] },
+      segment: { title: { text: 'Sales by Segment', left: 'center' }, tooltip: { trigger: 'item' }, legend: { bottom: 0 }, series: [{ type: 'pie', radius: '55%', center: ['50%', '45%'], data: Object.keys(aggSeg).map(k => ({ name: k, value: Math.round(aggSeg[k]) })), itemStyle: { borderColor: '#fff', borderWidth: 2 } }] },
+      category: { title: { text: 'Sales by Category', left: 'center' }, tooltip: { trigger: 'item' }, legend: { bottom: 0 }, series: [{ type: 'pie', radius: ['35%', '60%'], center: ['50%', '45%'], data: Object.keys(aggCat).map(k => ({ name: k, value: Math.round(aggCat[k]) })), itemStyle: { borderColor: '#fff', borderWidth: 2 } }] },
+      subCategory: { title: { text: 'Sales per Sub-Kategori', left: 'center' }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, grid: { left: '3%', right: '8%', bottom: '3%', containLabel: true }, xAxis: { type: 'value' }, yAxis: { type: 'category', data: sortedSubS.map(d => d[0]), axisLabel: { fontSize: 10 } }, series: [{ type: 'bar', data: sortedSubS.map(d => Math.round(d[1])), itemStyle: { color: '#0ea5e9' } }] },
+      profit: { title: { text: 'Profit/Loss per Sub-Kategori', left: 'center' }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, grid: { left: '3%', right: '4%', bottom: '18%', containLabel: true }, xAxis: { type: 'category', data: sortedSubP.map(d => d[0]), axisLabel: { interval: 0, rotate: 45, fontSize: 10 } }, yAxis: { type: 'value' }, series: [{ type: 'bar', data: sortedSubP.map(d => ({ value: Math.round(d[1]), itemStyle: { color: d[1] >= 0 ? '#10b981' : '#ef4444' } })) }] },
+      heatmap: { title: { text: 'Heatmap Penjualan (Region vs Category)', left: 'center' }, tooltip: { position: 'top' }, grid: { height: '55%', top: '18%' }, xAxis: { type: 'category', data: regions, splitArea: { show: true } }, yAxis: { type: 'category', data: categories, splitArea: { show: true } }, visualMap: { min: 0, max: Math.max(...heatmapArr.map(d=>d[2]), 100000), calculable: true, orient: 'horizontal', left: 'center', bottom: '0%', inRange: { color: ['#f8fafc', '#93c5fd', '#1e3a8a'] } }, series: [{ name: 'Sales', type: 'heatmap', data: heatmapArr, label: { show: true }, emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' } } }] }
+    };
+  }, [aggData]);
 
-  const segmentOption = useMemo(() => {
-    const agg = {}; filteredData.forEach(row => { if(row.Segment) agg[row.Segment] = (agg[row.Segment] || 0) + parseNum(row.Sales); });
-    return { title: { text: 'Sales by Segment', left: 'center' }, tooltip: { trigger: 'item' }, legend: { bottom: 0 }, series: [{ type: 'pie', radius: '55%', center: ['50%', '45%'], data: Object.keys(agg).map(k => ({ name: k, value: Math.round(agg[k]) })), itemStyle: { borderColor: '#fff', borderWidth: 2 } }] };
-  }, [filteredData]);
+  // HANDLER FILTER DENGAN TRANSITION
+  const handleYearChange = (e) => startTransition(() => setSelectedYear(e.target.value));
+  const handleRegionChange = (e) => startTransition(() => setSelectedRegion(e.target.value));
 
-  const categoryOption = useMemo(() => {
-    const agg = {}; filteredData.forEach(row => { if(row.Category) agg[row.Category] = (agg[row.Category] || 0) + parseNum(row.Sales); });
-    return { title: { text: 'Sales by Category', left: 'center' }, tooltip: { trigger: 'item' }, legend: { bottom: 0 }, series: [{ type: 'pie', radius: ['35%', '60%'], center: ['50%', '45%'], data: Object.keys(agg).map(k => ({ name: k, value: Math.round(agg[k]) })), itemStyle: { borderColor: '#fff', borderWidth: 2 } }] };
-  }, [filteredData]);
-
-  const subCategoryOption = useMemo(() => {
-    const agg = {}; filteredData.forEach(row => { const sub = row['Sub-Category']; if(sub) agg[sub] = (agg[sub] || 0) + parseNum(row.Sales); });
-    const sorted = Object.entries(agg).sort((a,b) => a[1] - b[1]);
-    return { title: { text: 'Sales per Sub-Kategori', left: 'center' }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, grid: { left: '3%', right: '8%', bottom: '3%', containLabel: true }, xAxis: { type: 'value' }, yAxis: { type: 'category', data: sorted.map(d => d[0]), axisLabel: { fontSize: 10 } }, series: [{ type: 'bar', data: sorted.map(d => Math.round(d[1])), itemStyle: { color: '#0ea5e9' } }] };
-  }, [filteredData]);
-
-  const profitOption = useMemo(() => {
-    const agg = {}; filteredData.forEach(row => { const sub = row['Sub-Category']; if(sub) agg[sub] = (agg[sub] || 0) + parseNum(row.Profit); });
-    const sorted = Object.entries(agg).sort((a,b) => b[1] - a[1]);
-    return { title: { text: 'Profit/Loss per Sub-Kategori', left: 'center' }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, grid: { left: '3%', right: '4%', bottom: '18%', containLabel: true }, xAxis: { type: 'category', data: sorted.map(d => d[0]), axisLabel: { interval: 0, rotate: 45, fontSize: 10 } }, yAxis: { type: 'value' }, series: [{ type: 'bar', data: sorted.map(d => ({ value: Math.round(d[1]), itemStyle: { color: d[1] >= 0 ? '#10b981' : '#ef4444' } })) }] };
-  }, [filteredData]);
-
-  const heatmapOption = useMemo(() => {
-    const regions = ['Central', 'East', 'South', 'West'], categories = ['Furniture', 'Office Supplies', 'Technology'], agg = {};
-    filteredData.forEach(row => { if(row.Region && row.Category) { const key = `${row.Region}-${row.Category}`; agg[key] = (agg[key] || 0) + parseNum(row.Sales); }});
-    const data = []; regions.forEach((reg, i) => { categories.forEach((cat, j) => { data.push([i, j, Math.round(agg[`${reg}-${cat}`] || 0)]); }); });
-    return { title: { text: 'Heatmap Penjualan (Region vs Category)', left: 'center' }, tooltip: { position: 'top' }, grid: { height: '55%', top: '18%' }, xAxis: { type: 'category', data: regions, splitArea: { show: true } }, yAxis: { type: 'category', data: categories, splitArea: { show: true } }, visualMap: { min: 0, max: Math.max(...data.map(d=>d[2]), 100000), calculable: true, orient: 'horizontal', left: 'center', bottom: '0%', inRange: { color: ['#f8fafc', '#93c5fd', '#1e3a8a'] } }, series: [{ name: 'Sales', type: 'heatmap', data: data, label: { show: true }, emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' } } }] };
-  }, [filteredData]);
-
-  // Fungsi aman untuk mengambil nama bulan dari string YYYY-MM
-  const formatBulan = (bulanTahun) => {
-    if (!bulanTahun || bulanTahun === '-') return '-';
-    const parts = bulanTahun.split('-');
-    return parts.length > 1 ? `Bulan ke-${parts[1]} (${parts[0]})` : bulanTahun;
-  };
+  const { kpi, insights } = aggData;
 
   return (
     <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans border-t-4 border-blue-600">
@@ -204,18 +197,19 @@ function App() {
       <div className="max-w-7xl mx-auto mb-6 bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-wrap gap-6 items-center">
         <div className="flex items-center gap-3">
           <span className="font-bold text-sm text-slate-700 uppercase tracking-wider">📅 Tahun:</span>
-          <select className="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl focus:ring-2 focus:ring-blue-500 p-2 px-4 font-bold cursor-pointer" value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)}>
+          <select className="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl focus:ring-2 focus:ring-blue-500 p-2 px-4 font-bold cursor-pointer" value={selectedYear} onChange={handleYearChange}>
             {filterOptions.years.map(year => <option key={year} value={year}>{year}</option>)}
           </select>
         </div>
         <div className="flex items-center gap-3">
           <span className="font-bold text-sm text-slate-700 uppercase tracking-wider">📍 Wilayah:</span>
-          <select className="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl focus:ring-2 focus:ring-blue-500 p-2 px-4 font-bold cursor-pointer" value={selectedRegion} onChange={(e) => setSelectedRegion(e.target.value)}>
+          <select className="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl focus:ring-2 focus:ring-blue-500 p-2 px-4 font-bold cursor-pointer" value={selectedRegion} onChange={handleRegionChange}>
             {filterOptions.regions.map(region => <option key={region} value={region}>{region}</option>)}
           </select>
         </div>
-        <div className="ml-auto text-xs font-bold text-slate-600 bg-slate-100 p-2 px-4 rounded-xl border border-slate-200">
-          📂 Ter-filter: <span className="text-blue-600 font-extrabold">{filteredData.length.toLocaleString('id-ID')}</span> Baris Transaksi
+        <div className="ml-auto text-xs font-bold text-slate-600 bg-slate-100 p-2 px-4 rounded-xl border border-slate-200 flex items-center gap-2">
+          {isPending && <span className="animate-spin text-blue-500">⏳</span>}
+          📂 Ter-filter: <span className="text-blue-600 font-extrabold">{filteredData.length.toLocaleString('id-ID')}</span> Baris
         </div>
       </div>
 
@@ -229,15 +223,15 @@ function App() {
       </div>
 
       {/* ERROR KALAU FILTER KOSONG */}
-      {!insights && (
+      {!insights && !isPending && (
         <div className="max-w-7xl mx-auto bg-red-50 text-red-600 p-8 rounded-2xl text-center font-bold border border-red-200">
           ⚠️ Tidak ada data untuk kombinasi filter ini. Silakan ubah filter.
         </div>
       )}
 
-      {/* HALAMAN RENDER (MENGGUNAKAN CONDITIONAL RENDERING AGAR TIDAK RAM CRASH) */}
+      {/* KONTEN UTAMA */}
       {insights && (
-        <div className="max-w-7xl mx-auto min-h-[500px]">
+        <div className={`max-w-7xl mx-auto min-h-[500px] transition-opacity duration-300 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
           
           {/* TAB 1: OVERVIEW */}
           {activeTab === 'overview' && (
@@ -263,20 +257,20 @@ function App() {
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                  <div className="p-4 border-b border-slate-100"><ReactECharts option={salesTrendOption} notMerge={true} style={{ height: '320px' }} /></div>
+                  <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.trend} style={{ height: '320px' }} /></div>
                   <div className="p-6 bg-slate-50/80 flex-1 border-t border-slate-200">
                     <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2"><span className="text-blue-500">📈</span> Narasi Tren Dinamis:</h4>
                     <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                      Berdasarkan filter data yang kamu pilih, puncak penjualan omset tertinggi terjadi pada periode <strong>{formatBulan(insights.topMonth.name)}</strong> dengan total pemasukan mencapai <strong className="text-green-600">{formatUang(insights.topMonth.value)}</strong>. Fluktuasi ini menunjukkan bahwa perusahaan harus memusatkan kampanye pemasaran saat mendekati periode puncak ini.
+                      Puncak penjualan omset tertinggi terjadi pada periode <strong>{formatBulan(insights.topMonth.name)}</strong> dengan total pemasukan mencapai <strong className="text-green-600">{formatUang(insights.topMonth.value)}</strong>.
                     </p>
                   </div>
                 </div>
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                  <div className="p-4 border-b border-slate-100">{!isMapLoaded ? <div className="h-[320px] flex items-center justify-center font-bold">Memuat Peta...</div> : <ReactECharts option={mapChartOption} notMerge={true} style={{ height: '320px' }} />}</div>
+                  <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.map} isMapLoaded={isMapLoaded} style={{ height: '320px' }} /></div>
                   <div className="p-6 bg-slate-50/80 flex-1 border-t border-slate-200">
                     <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">📍</span> Narasi Geografis Dinamis:</h4>
                     <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                      Untuk kriteria data saat ini, negara bagian <strong>{insights.topState.name}</strong> tampil sebagai kontributor paling dominan, menyumbangkan pemasukan kotor sebesar <strong className="text-blue-600">{formatUang(insights.topState.value)}</strong>. Hal ini menjadikannya area paling krusial untuk distribusi inventaris logistik.
+                      Negara bagian <strong>{insights.topState.name}</strong> tampil sebagai kontributor paling dominan, menyumbangkan pemasukan kotor sebesar <strong className="text-blue-600">{formatUang(insights.topState.value)}</strong>.
                     </p>
                   </div>
                 </div>
@@ -288,20 +282,20 @@ function App() {
           {activeTab === 'demografi' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-slate-100"><ReactECharts option={segmentOption} notMerge={true} style={{ height: '350px' }} /></div>
+                <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.segment} style={{ height: '350px' }} /></div>
                 <div className="p-6 bg-slate-50/80 flex-1 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">👤</span> Pangsa Segmen Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Analisis data menunjukkan bahwa kelompok pembeli dari segmen <strong>{insights.topSegment.name}</strong> menjadi penopang pendapatan utama dengan transaksi mencapai <strong>{formatUang(insights.topSegment.value)}</strong>. Strategi <i>customer retention</i> harus diprioritaskan pada segmen ini.
+                    Kelompok pembeli dari segmen <strong>{insights.topSegment.name}</strong> menjadi penopang pendapatan utama dengan transaksi mencapai <strong>{formatUang(insights.topSegment.value)}</strong>.
                   </p>
                 </div>
               </div>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-slate-100"><ReactECharts option={categoryOption} notMerge={true} style={{ height: '350px' }} /></div>
+                <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.category} style={{ height: '350px' }} /></div>
                 <div className="p-6 bg-slate-50/80 flex-1 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">📦</span> Kategori Favorit Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Dari data yang disaring, komoditas barang dari kategori <strong>{insights.topCategory.name}</strong> sangat diminati pasar, menyumbang sales sebesar <strong>{formatUang(insights.topCategory.value)}</strong>. Manajemen stok untuk barang di kategori ini harus diperketat agar tidak kehabisan barang.
+                    Komoditas barang dari kategori <strong>{insights.topCategory.name}</strong> sangat diminati pasar, menyumbang sales sebesar <strong>{formatUang(insights.topCategory.value)}</strong>.
                   </p>
                 </div>
               </div>
@@ -312,20 +306,20 @@ function App() {
           {activeTab === 'produk' && (
             <div className="space-y-8 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-slate-100"><ReactECharts option={subCategoryOption} notMerge={true} style={{ height: '420px' }} /></div>
+                <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.subCategory} style={{ height: '420px' }} /></div>
                 <div className="p-6 bg-slate-50/80 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">📊</span> Evaluasi Omset Sub-Kategori Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Membedah lebih dalam ke tingkat sub-kategori, produk unggulan (Star Product) saat ini adalah <strong>{insights.topSub.name}</strong> dengan raihan sales memukau sebesar <strong>{formatUang(insights.topSub.value)}</strong>. Produk ini memiliki daya tarik pasar yang kuat di rentang filter yang Anda pilih.
+                    Produk unggulan (Star Product) saat ini adalah <strong>{insights.topSub.name}</strong> dengan raihan sales memukau sebesar <strong>{formatUang(insights.topSub.value)}</strong>.
                   </p>
                 </div>
               </div>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-slate-100"><ReactECharts option={profitOption} notMerge={true} style={{ height: '420px' }} /></div>
+                <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.profit} style={{ height: '420px' }} /></div>
                 <div className="p-6 bg-slate-50/80 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">⚠️</span> Peringatan Profitabilitas Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Meskipun ada barang laku, grafik ini mendeteksi titik lemah perusahaan. Sub-kategori <strong>{insights.worstSub.name}</strong> adalah produk dengan performa margin terburuk saat ini dengan riwayat profitabilitas di angka <strong className="text-red-600">{formatUang(insights.worstSub.value)}</strong>. Ini butuh evaluasi Harga Modal (HPP) segera!
+                    Titik lemah perusahaan terletak pada <strong>{insights.worstSub.name}</strong> dengan riwayat profitabilitas di angka <strong className="text-red-600">{formatUang(insights.worstSub.value)}</strong>.
                   </p>
                 </div>
               </div>
@@ -336,11 +330,11 @@ function App() {
           {activeTab === 'kesimpulan' && (
             <div className="space-y-8 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-slate-100"><ReactECharts option={heatmapOption} notMerge={true} style={{ height: '380px' }} /></div>
+                <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.heatmap} style={{ height: '380px' }} /></div>
                 <div className="p-6 bg-slate-50/80 border-t border-slate-200">
                   <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><span className="text-blue-500">🎛️</span> Matriks Region-Kategori Dinamis:</h4>
                   <p className="text-sm text-slate-600 leading-relaxed text-justify">
-                    Heatmap memvisualisasikan interaksi silang yang kuat. Kombinasi pasar yang paling panas dan menghasilkan uang terbanyak berada di wilayah-kategori <strong>{insights.topRegCat.name}</strong> dengan capaian omset <strong>{formatUang(insights.topRegCat.value)}</strong>.
+                    Kombinasi pasar yang menghasilkan uang terbanyak berada di <strong>{insights.topRegCat.name}</strong> dengan capaian omset <strong>{formatUang(insights.topRegCat.value)}</strong>.
                   </p>
                 </div>
               </div>
@@ -354,35 +348,14 @@ function App() {
                   Berdasarkan pemrosesan data filter secara seketika ({filteredData.length.toLocaleString()} baris transaksi), mesin cerdas merumuskan rekomendasi taktis berikut:
                 </p>
                 <ul className="space-y-4 text-sm text-slate-200 leading-relaxed text-justify">
-                  <li className="flex gap-3 items-start">
-                    <span className="text-blue-400 font-bold text-lg mt-0.5">1.</span>
-                    <div>
-                      Pertahankan stok pengiriman prioritas untuk negara bagian <strong>{insights.topState.name}</strong>, mengingat area ini adalah jantung pendapatan perusahaan (Total: {formatUang(insights.topState.value)}).
-                    </div>
-                  </li>
-                  <li className="flex gap-3 items-start">
-                    <span className="text-blue-400 font-bold text-lg mt-0.5">2.</span>
-                    <div>
-                      Fokuskan alokasi iklan digital dan promosi B2C/B2B pada segmen <strong>{insights.topSegment.name}</strong> yang terbukti menjadi tulang punggung transaksi.
-                    </div>
-                  </li>
-                  <li className="flex gap-3 items-start">
-                    <span className="text-blue-400 font-bold text-lg mt-0.5">3.</span>
-                    <div>
-                      Lakukan audit harga modal dan kelayakan diskon segera terhadap produk <strong>{insights.worstSub.name}</strong>. Produk ini terindikasi sangat menguras margin keuntungan perusahaan saat ini (Margin tercatat: {formatUang(insights.worstSub.value)}).
-                    </div>
-                  </li>
-                  <li className="flex gap-3 items-start">
-                    <span className="text-blue-400 font-bold text-lg mt-0.5">4.</span>
-                    <div>
-                      Siapkan anggaran besar saat mendekati <strong>{formatBulan(insights.topMonth.name)}</strong> untuk memaksimalkan momentum periode belanja tertinggi bulanan.
-                    </div>
-                  </li>
+                  <li className="flex gap-3 items-start"><span className="text-blue-400 font-bold text-lg mt-0.5">1.</span><div>Pertahankan stok untuk <strong>{insights.topState.name}</strong> (Total: {formatUang(insights.topState.value)}).</div></li>
+                  <li className="flex gap-3 items-start"><span className="text-blue-400 font-bold text-lg mt-0.5">2.</span><div>Fokuskan alokasi iklan pada segmen <strong>{insights.topSegment.name}</strong>.</div></li>
+                  <li className="flex gap-3 items-start"><span className="text-blue-400 font-bold text-lg mt-0.5">3.</span><div>Lakukan audit harga modal terhadap produk <strong>{insights.worstSub.name}</strong> (Margin: {formatUang(insights.worstSub.value)}).</div></li>
+                  <li className="flex gap-3 items-start"><span className="text-blue-400 font-bold text-lg mt-0.5">4.</span><div>Siapkan anggaran besar di <strong>{formatBulan(insights.topMonth.name)}</strong> untuk memaksimalkan momentum periode belanja.</div></li>
                 </ul>
               </div>
             </div>
           )}
-
         </div>
       )}
 
@@ -393,5 +366,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
