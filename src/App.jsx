@@ -186,7 +186,7 @@ export default function App() {
       <div className="max-w-7xl mx-auto mb-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-800 tracking-tight">Superstore Performance Report</h1>
-          <p className="text-slate-500 font-medium mt-1">Dashboard Interaktif dengan Narasi AI — Pertemuan 18</p>
+          <p className="text-slate-500 font-medium mt-1">Dashboard Interaktif — Pertemuan 18</p>
         </div>
         <div className="text-right">
           <p className="font-bold text-slate-800 text-lg">Amelia Delfina Putri</p>
