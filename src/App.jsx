@@ -43,6 +43,7 @@ const preprocessedData = superstoreData.map(row => {
     parsedSales: parseNum(row.Sales),
     parsedProfit: parseNum(row.Profit),
     parsedQty: parseNum(row.Quantity),
+    parsedDiscount: parseNum(row.Discount || row.Diskon), // Wajib untuk Scatter Plot
     year: year,
     monthYear: getMonthYearFromRow(row, year),
     state: row['State/Province'] || row.State || 'Unknown',
@@ -115,6 +116,10 @@ export default function App() {
   const aggData = useMemo(() => {
     const kpi = { totalSales: 0, totalProfit: 0, totalQuantity: 0 };
     const aggMonth = {}, aggState = {}, aggSeg = {}, aggCat = {}, aggSubSales = {}, aggSubProf = {}, aggRegCat = {};
+    const scatterData = [];
+    
+    let highDiscountLossCount = 0;
+    let highDiscountLossAmount = 0;
 
     filteredData.forEach(row => {
       kpi.totalSales += row.parsedSales;
@@ -130,6 +135,13 @@ export default function App() {
       
       const rcKey = `${row.region}-${row.category}`;
       aggRegCat[rcKey] = (aggRegCat[rcKey] || 0) + row.parsedSales;
+
+      // Data Scatter Plot & Perhitungan Kebocoran Diskon
+      scatterData.push([row.parsedDiscount, row.parsedProfit, row.subCategory]);
+      if (row.parsedDiscount >= 0.2 && row.parsedProfit < 0) {
+        highDiscountLossCount++;
+        highDiscountLossAmount += Math.abs(row.parsedProfit);
+      }
     });
 
     kpi.profitMargin = kpi.totalSales > 0 ? (kpi.totalProfit / kpi.totalSales) * 100 : 0;
@@ -146,10 +158,11 @@ export default function App() {
     };
 
     return {
-      kpi, aggMonth, aggState, aggSeg, aggCat, aggSubSales, aggSubProf, aggRegCat,
+      kpi, aggMonth, aggState, aggSeg, aggCat, aggSubSales, aggSubProf, aggRegCat, scatterData,
       insights: filteredData.length > 0 ? {
         topMonth: getTop(aggMonth), topState: getTop(aggState), topSegment: getTop(aggSeg),
-        topCategory: getTop(aggCat), topSub: getTop(aggSubSales), worstSub: getBottom(aggSubProf), topRegCat: getTop(aggRegCat)
+        topCategory: getTop(aggCat), topSub: getTop(aggSubSales), worstSub: getBottom(aggSubProf), topRegCat: getTop(aggRegCat),
+        highDiscountLossCount, highDiscountLossAmount // Data dinamis untuk narasi scatter
       } : null
     };
   }, [filteredData]);
@@ -158,7 +171,7 @@ export default function App() {
   // 5. CHART OPTIONS
   // ========================================================================
   const chartOptions = useMemo(() => {
-    const { aggMonth, aggState, aggSeg, aggCat, aggSubSales, aggSubProf, aggRegCat } = aggData;
+    const { aggMonth, aggState, aggSeg, aggCat, aggSubSales, aggSubProf, aggRegCat, scatterData } = aggData;
     const sortedMonth = Object.keys(aggMonth).sort();
     const sortedSubS = Object.entries(aggSubSales).sort((a,b) => a[1] - b[1]);
     const sortedSubP = Object.entries(aggSubProf).sort((a,b) => b[1] - a[1]);
@@ -173,7 +186,15 @@ export default function App() {
       category: { title: { text: 'Sales by Category', left: 'center' }, tooltip: { trigger: 'item' }, legend: { bottom: 0 }, series: [{ type: 'pie', radius: ['35%', '60%'], center: ['50%', '45%'], data: Object.keys(aggCat).map(k => ({ name: k, value: Math.round(aggCat[k]) })), itemStyle: { borderColor: '#fff', borderWidth: 2 } }] },
       subCategory: { title: { text: 'Sales per Sub-Kategori', left: 'center' }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, grid: { left: '3%', right: '8%', bottom: '3%', containLabel: true }, xAxis: { type: 'value' }, yAxis: { type: 'category', data: sortedSubS.map(d => d[0]), axisLabel: { fontSize: 10 } }, series: [{ type: 'bar', data: sortedSubS.map(d => Math.round(d[1])), itemStyle: { color: '#0ea5e9' } }] },
       profit: { title: { text: 'Profit/Loss per Sub-Kategori', left: 'center' }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, grid: { left: '3%', right: '4%', bottom: '18%', containLabel: true }, xAxis: { type: 'category', data: sortedSubP.map(d => d[0]), axisLabel: { interval: 0, rotate: 45, fontSize: 10 } }, yAxis: { type: 'value' }, series: [{ type: 'bar', data: sortedSubP.map(d => ({ value: Math.round(d[1]), itemStyle: { color: d[1] >= 0 ? '#10b981' : '#ef4444' } })) }] },
-      heatmap: { title: { text: 'Heatmap Penjualan (Region vs Category)', left: 'center' }, tooltip: { position: 'top' }, grid: { height: '55%', top: '18%' }, xAxis: { type: 'category', data: regions, splitArea: { show: true } }, yAxis: { type: 'category', data: categories, splitArea: { show: true } }, visualMap: { min: 0, max: Math.max(...heatmapArr.map(d=>d[2]), 100000), calculable: true, orient: 'horizontal', left: 'center', bottom: '0%', inRange: { color: ['#f8fafc', '#93c5fd', '#1e3a8a'] } }, series: [{ name: 'Sales', type: 'heatmap', data: heatmapArr, label: { show: true }, emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' } } }] }
+      heatmap: { title: { text: 'Heatmap Penjualan (Region vs Category)', left: 'center' }, tooltip: { position: 'top' }, grid: { height: '55%', top: '18%' }, xAxis: { type: 'category', data: regions, splitArea: { show: true } }, yAxis: { type: 'category', data: categories, splitArea: { show: true } }, visualMap: { min: 0, max: Math.max(...heatmapArr.map(d=>d[2]), 100000), calculable: true, orient: 'horizontal', left: 'center', bottom: '0%', inRange: { color: ['#f8fafc', '#93c5fd', '#1e3a8a'] } }, series: [{ name: 'Sales', type: 'heatmap', data: heatmapArr, label: { show: true }, emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' } } }] },
+      scatter: { 
+        title: { text: 'Akar Masalah: Dampak Diskon ke Profit', left: 'center' }, 
+        tooltip: { trigger: 'item', formatter: (p) => `${p.data[2]}<br/>Diskon: ${p.data[0]*100}%<br/>Profit: $${p.data[1].toLocaleString('id-ID')}` }, 
+        grid: { left: '8%', right: '8%', bottom: '15%', containLabel: true }, 
+        xAxis: { type: 'value', name: 'Diskon Diberikan', axisLabel: { formatter: (v) => `${v*100}%` } }, 
+        yAxis: { type: 'value', name: 'Profit / Loss ($)' }, 
+        series: [{ type: 'scatter', symbolSize: 8, data: scatterData, itemStyle: { color: (p) => p.data[1] < 0 ? '#ef4444' : '#10b981', opacity: 0.6 } }] 
+      }
     };
   }, [aggData]);
 
@@ -223,7 +244,7 @@ export default function App() {
 
       {/* TABS */}
       <div className="max-w-7xl mx-auto mb-8 flex flex-wrap gap-2 bg-slate-200/60 p-1.5 rounded-2xl border border-slate-300">
-        {[ { id: 'overview', label: '📊 Ringkasan Eksekutif' }, { id: 'demografi', label: '🥧 Pangsa Segmen & Kategori' }, { id: 'produk', label: '📈 Performa Sub-Kategori' }, { id: 'kesimpulan', label: '🎯 Kesimpulan Dinamis' } ].map(tab => (
+        {[ { id: 'overview', label: '📊 Ringkasan Eksekutif' }, { id: 'demografi', label: '🥧 Segmen & Kategori' }, { id: 'produk', label: '📈 Performa Sub-Kategori' }, { id: 'kesimpulan', label: '🎯 Kesimpulan' } ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 py-3 px-4 rounded-xl font-bold text-xs md:text-sm tracking-wide transition-all duration-300 ${activeTab === tab.id ? 'bg-white text-blue-600 shadow-md border border-slate-200' : 'text-slate-600 hover:bg-white/40'}`}>
             {tab.label}
           </button>
@@ -335,9 +356,22 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB 4: KESIMPULAN AI */}
+          {/* TAB 4: KESIMPULAN (DENGAN SCATTER PLOT) */}
           {activeTab === 'kesimpulan' && (
             <div className="space-y-8 animate-fade-in">
+              
+              {/* SCATTER PLOT - DENGAN NARASI DINAMIS AI */}
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col border-l-4 border-l-red-500">
+                <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.scatter} style={{ height: '380px' }} /></div>
+                <div className="p-6 bg-red-50/30 border-t border-slate-200">
+                  <h4 className="font-bold text-red-700 mb-2 flex items-center gap-2"><span className="text-red-500">🔎</span> Investigasi Akar Masalah (Dampak Diskon):</h4>
+                  <p className="text-sm text-slate-700 leading-relaxed text-justify">
+                    <i>Scatter Plot</i> di atas membongkar akar masalah anjloknya profit untuk <strong className="text-slate-800">{filterText}</strong>. Terlihat jelas korelasi negatif yang mematikan: saat tingkat diskon diberikan menyentuh angka 20% ke atas, mayoritas transaksi langsung terjun bebas ke zona kerugian (titik merah). Secara spesifik, mesin analitik mencatat ada <strong>{insights.highDiscountLossCount.toLocaleString('id-ID')} transaksi hancur merugi</strong> akibat obral diskon tersebut, membakar uang perusahaan hingga <strong className="text-red-600 font-bold">{formatUang(insights.highDiscountLossAmount)}</strong>! Ini adalah bukti konkret bahwa strategi diskon agresif harus segera ditertibkan.
+                  </p>
+                </div>
+              </div>
+
+              {/* HEATMAP */}
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
                 <div className="p-4 border-b border-slate-100"><MemoizedChart option={chartOptions.heatmap} style={{ height: '380px' }} /></div>
                 <div className="p-6 bg-slate-50/80 border-t border-slate-200">
@@ -350,7 +384,7 @@ export default function App() {
 
               {/* AUTO-GENERATED EXECUTIVE SUMMARY */}
               <div className="bg-gradient-to-br from-slate-900 to-blue-950 text-white p-8 md:p-10 rounded-3xl shadow-xl relative overflow-hidden border border-slate-800">
-                <div className="absolute -top-10 -right-10 p-12 opacity-10 text-9xl font-black select-none pointer-events-none">AI</div>
+                <div className="absolute -top-10 -right-10 p-12 opacity-10 text-9xl font-black select-none pointer-events-none"></div>
                 <h3 className="text-xl md:text-2xl font-black mb-4 flex items-center gap-3 tracking-wide">
                   <span>🤖</span> Konklusi Strategis Otomatis (Auto-Generated)
                 </h3>
@@ -376,8 +410,8 @@ export default function App() {
                   <li className="flex gap-4 items-start bg-red-900/20 p-4 rounded-xl border border-red-500/20">
                     <span className="text-red-400 font-bold text-xl leading-none">3.</span>
                     <div>
-                      <strong className="text-red-300 block text-base mb-1">Intervensi Kebijakan Harga Segera!</strong>
-                      Gelar audit investigasi secara menyeluruh terhadap skema harga dan kelayakan diskon pada produk <strong className="text-red-300">{insights.worstSub.name}</strong>. Produk ini bukan lagi aset, melainkan beban (*liability*) yang menguras kas perusahaan dengan catatan margin di angka <strong>{formatUang(insights.worstSub.value)}</strong>.
+                      <strong className="text-red-300 block text-base mb-1">Intervensi Kebijakan Diskon!</strong>
+                      Segera bekukan hak pemberian diskon di atas 20% oleh *sales*! Kebijakan ini terbukti fatal dan telah membakar uang senilai <strong>{formatUang(insights.highDiscountLossAmount)}</strong> pada rentang data ini. Selain itu, produk <strong className="text-red-300">{insights.worstSub.name}</strong> perlu diaudit nilai Harga Pokok Penjualan-nya (HPP).
                     </div>
                   </li>
                   <li className="flex gap-4 items-start bg-white/5 p-4 rounded-xl border border-white/10">
